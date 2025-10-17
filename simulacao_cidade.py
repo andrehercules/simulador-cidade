@@ -49,7 +49,13 @@ work_start, work_end = 18, 64
 desemprego_base = 0.07
 produtividade_base = {'agro': 30000, 'industria': 35000, 'servicos': 50000}
 participacao_setores = {'agro': 0.10, 'industria': 0.25, 'servicos': 0.65}
-percent_escolarizacao = {'fund': 0.98}
+
+percent_escolarizacao = {
+    'fund': 0.98,
+    'medio': 0.85,
+    'superior': 0.30
+}
+anos_nivel = {'fund': 9, 'medio': 3, 'superior': 4}
 anos_fund = 9
 custo_aluno = {'fund': 2500}
 gasto_saude_per_capita = 1500
@@ -116,6 +122,7 @@ def run_simulation(fert_scale=1.0, mort_scale=1.0, mig_scale=1.0,
     pib_per_capita = []
     gasto_educacao = []
     gasto_saude = []
+    nivel_escolaridade_medio_hist = []
 
     taxa_desemprego_ano_anterior = desemprego_base
 
@@ -170,12 +177,23 @@ def run_simulation(fert_scale=1.0, mort_scale=1.0, mig_scale=1.0,
         gasto_saude.append(pop_total_t1 * gasto_saude_per_capita)
         gasto_educacao.append(gasto_e)
 
+        # --- Escolaridade média ---
+        pop_total_array = new_pop_f + new_pop_m
+        anos_cursados_efetivos = 0
+        for nivel, perc in percent_escolarizacao.items():
+            anos_n = anos_nivel[nivel]
+            pop_ativa_nivel = pop_total_array[idade_inicio_fund:idade_inicio_fund+anos_n].sum() * perc
+            anos_cursados_efetivos += pop_ativa_nivel * anos_n
+        nivel_escolaridade_medio = anos_cursados_efetivos / pop_total_t1
+        nivel_escolaridade_medio_hist.append(nivel_escolaridade_medio)
+
     outputs = {
         "total_pop": np.array(total_pop),
         "pib": np.array(pib),
         "pib_per_capita": np.array(pib_per_capita),
         "gasto_saude": np.array(gasto_saude),
-        "gasto_educ": np.array(gasto_educacao)
+        "gasto_educ": np.array(gasto_educacao),
+        "nivel_escolaridade_medio": np.array(nivel_escolaridade_medio_hist)
     }
     if return_history:
         outputs.update({"pop_f": pop_f, "pop_m": pop_m})
@@ -267,11 +285,13 @@ with col2:
 with col3:
     st.metric("PIB per Capita", f"R$ {out_proj['pib_per_capita'][-1]:,.2f}")
 
-col4, col5 = st.columns(2)
+col4, col5, col6 = st.columns(3)
 with col4:
     st.metric("Gasto com Educação", f"R$ {out_proj['gasto_educ'][-1]:,.2f}")
 with col5:
     st.metric("Gasto com Saúde", f"R$ {out_proj['gasto_saude'][-1]:,.2f}")
+with col6:
+    st.metric("Escolaridade Média", f"{out_proj['nivel_escolaridade_medio'][-1]:.2f} anos")
 
 # =========================================================
 # Gráfico da população
@@ -321,4 +341,16 @@ ax3.grid(True)
 ax3.yaxis.set_major_formatter(FuncFormatter(formatar_valor))
 st.pyplot(fig3)
 
-st.info("Simulação feita a partir de 2022. Os dados históricos anteriores a 2022 foram usados para calibrar o modelo. O usuário pode escolher o ano da projeção e o impacto da fertilidade no futuro da população, educação e PIB.")
+# =========================================================
+# Gráfico da escolaridade média
+# =========================================================
+st.header("Evolução do Nível Médio de Escolaridade")
+fig4, ax4 = plt.subplots(figsize=(10,6))
+ax4.plot(anos_sim, out_proj['nivel_escolaridade_medio'], label="Escolaridade Média")
+ax4.set_xlabel("Ano")
+ax4.set_ylabel("Anos")
+ax4.grid(True)
+ax4.legend()
+st.pyplot(fig4)
+
+st.info("Simulação feita a partir de 2022. Os dados históricos anteriores a 2022 foram usados para calibrar o modelo. O usuário pode escolher o ano da projeção e o impacto da fertilidade no futuro da população, educação, PIB e escolaridade.")
