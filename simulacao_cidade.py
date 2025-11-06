@@ -34,10 +34,35 @@ pop_inicial = create_age_distribution(pop_inicial_total, max_age=max_idade)
 pop_inicial_f = pop_inicial * sexo_ratio_f
 pop_inicial_m = pop_inicial * (1 - sexo_ratio_f)
 
-# --- Fertilidade, mortalidade e migração ---
+# --- Fertilidade, mortalidade e migração (MODELOS REALISTAS) ---
+
+# 1. FERTILIDADE (Curva com pico)
+# Modelo que simula um pico de fertilidade (ex: pico aos 28 anos)
+# e resulta numa Taxa de Fecundidade Total (TFR) de aprox. 2.23
 fert_by_age = np.zeros(max_idade + 1)
-fert_by_age[15:50] = np.linspace(0.01, 0.08, 35)
-mort_by_age_base = np.linspace(0.001, 0.15, max_idade + 1)
+start_age = 15
+peak_age = 28
+end_age = 49
+peak_fert = 0.12  # Taxa máxima no pico
+
+# Aumento da fertilidade da idade inicial até o pico
+n_rise = peak_age - start_age + 1
+fert_by_age[start_age : peak_age + 1] = np.linspace(0.02, peak_fert, n_rise)
+
+# Queda da fertilidade do pico até o fim do período fértil
+n_fall = end_age - peak_age
+fert_by_age[peak_age + 1 : end_age + 1] = np.linspace(peak_fert * 0.95, 0.005, n_fall)
+
+# 2. MORTALIDADE (Curva "Banheira" ou "Jota")
+# Modelo baseado em interpolação de pontos-chave, simulando
+# uma "curva de banheira" (mortalidade infantil alta, cai na juventude,
+# e sobe exponencialmente na velhice).
+# Valores aproximados com base em tábuas de vida reais (ex: IBGE).
+mort_key_ages =  [0,   1,     15,     30,     60,   80,    100]
+mort_key_rates = [0.012, 0.001, 0.0006, 0.0015, 0.01, 0.07,  0.5] # Taxas de mortalidade (qx)
+
+all_ages = np.arange(max_idade + 1)
+mort_by_age_base = np.interp(all_ages, mort_key_ages, mort_key_rates)
 
 mig_total_base = 150
 mig_by_age_dist = np.zeros(max_idade + 1)
