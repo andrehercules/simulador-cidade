@@ -189,6 +189,8 @@ st.write(f"Período histórico: {ano_inicial} a {ano_projecao}. Projeção até 
 
 st.sidebar.header("Ajustes de Cenário")
 fert_increase_pct = st.sidebar.slider("Aumento na taxa de natalidade (%)", -50, 100, 0) / 100
+invest_educ_pct = st.sidebar.slider("Variação no Investimento em Educação (%)", -50, 100, 0) / 100
+invest_saude_pct = st.sidebar.slider("Variação no Investimento em Saúde (%)", -50, 100, 0) / 100
 ano_usuario = st.sidebar.slider("Selecione o ano da projeção", min_value=ano_projecao+1,
                                 max_value=ano_projecao+anos_projecao, value=ano_projecao+10)
 
@@ -219,7 +221,8 @@ def formatar_habitantes(valor, pos):
 def run_simulation(fert_scale=1.0, mort_scale=1.0, mig_scale=1.0,
                    fert_increase_pct=0.0, anos_simular=50, pop_f_ini=None, pop_m_ini=None,
                    return_history=False,
-                   param_custo_aluno=2500.0, param_gasto_saude_pc=1500.0):
+                   param_custo_aluno=2500.0, param_gasto_saude_pc=1500.0,
+                   invest_educ_pct=0.0, invest_saude_pct=0.0    ):
     fert_local = fert_by_age * fert_scale * (1 + fert_increase_pct)
     mort_local = mort_by_age_base * mort_scale
     mig_total_local = mig_total_base * mig_scale
@@ -285,9 +288,20 @@ def run_simulation(fert_scale=1.0, mort_scale=1.0, mig_scale=1.0,
         # Educação e saúde
         idade_inicio_fund = 6
         alunos_f = new_pop_f[idade_inicio_fund:idade_inicio_fund+anos_fund].sum() * percent_escolarizacao['fund']
-        gasto_e = alunos_f * param_custo_aluno * anos_custeio_educ
-        gasto_s = pop_total_t1 * param_gasto_saude_pc
         
+        # 1. Calcula o gasto "base" (calibrado)
+        gasto_e_base = alunos_f * param_custo_aluno * anos_custeio_educ
+        gasto_s_base = pop_total_t1 * param_gasto_saude_pc
+        
+        # 2. Aplica o ajuste do slider (só funciona se a simulação NÃO for histórica)
+        #    (Não queremos aplicar o slider do usuário no cálculo de 2014-2021)
+        if not return_history:
+            gasto_e = gasto_e_base * (1 + invest_educ_pct)
+            gasto_s = gasto_s_base * (1 + invest_saude_pct)
+        else:
+            gasto_e = gasto_e_base
+            gasto_s = gasto_s_base
+
         gasto_saude.append(gasto_s)
         gasto_educacao.append(gasto_e)
 
@@ -427,7 +441,10 @@ out_proj = run_simulation(
     pop_m_ini=out_hist['pop_m'][-1],
     # Passe os parâmetros calibrados
     param_custo_aluno=custo_aluno_opt,
-    param_gasto_saude_pc=gasto_saude_pc_opt
+    param_gasto_saude_pc=gasto_saude_pc_opt,
+    # PASSE OS VALORES DOS SLIDERS AQUI:
+    invest_educ_pct=invest_educ_pct,
+    invest_saude_pct=invest_saude_pct
 )
 
 anos_sim = np.arange(ano_projecao+1, ano_usuario+1)
