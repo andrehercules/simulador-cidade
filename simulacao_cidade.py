@@ -184,7 +184,7 @@ df_hist = pd.DataFrame(dados_historicos).set_index('ano')
 # Interface Streamlit
 # =========================================================
 st.set_page_config(layout="wide")
-st.title("Simulador: Fertilidade e Impacto Econômico (Calibração) - Salgueiro (PE)")
+st.title("Simulador: Fertilidade e Impacto Econômico")
 st.write(f"Período histórico: {ano_inicial} a {ano_projecao}. Projeção até {ano_projecao + anos_projecao}.")
 
 st.sidebar.header("Ajustes de Cenário")
@@ -474,69 +474,6 @@ out_proj = run_simulation(
 anos_sim = np.arange(ano_projecao+1, ano_usuario+1)
 
 # =========================================================
-# Taxa de erro histórica (CÁLCULO DETALHADO - CORRIGIDO)
-# =========================================================
-
-# 1. Erros de População e PIB
-# A simulação gera dados a partir de 2015 (índice 1 em diante da lista total_pop)
-sim_pop_hist = out_hist['total_pop'][1:anos_historicos+1] 
-sim_pib_hist = out_hist['pib'][:anos_historicos]
-
-# Comparamos com dados reais a partir de 2015 também
-real_pop_hist = df_hist['populacao_real'].values[1:] 
-real_pib_hist = df_hist['pib_real'].values[1:]
-
-erro_pop_pct = np.mean(np.abs(sim_pop_hist - real_pop_hist) / real_pop_hist * 100)
-erro_pib_pct = np.mean(np.abs(sim_pib_hist - real_pib_hist) / real_pib_hist * 100)
-
-# 2. Erros de Saúde e Educação (temos dados apenas para 2020-2021)
-real_saude = df_hist['gasto_saude_real'].dropna()
-real_educ = df_hist['gasto_educ_real'].dropna()
-
-# Identificamos quais anos têm dados
-anos_com_dados = real_saude.index.values
-
-# CORREÇÃO AQUI: Subtraímos (ano_inicial + 1) porque a lista de gastos simulados começa em 2015
-indices_validos = [ano - (ano_inicial + 1) for ano in anos_com_dados]
-
-# Agora pegamos os valores simulados usando os índices corretos
-sim_saude_valid = np.array(out_hist['gasto_saude'])[indices_validos]
-sim_educ_valid = np.array(out_hist['gasto_educ'])[indices_validos]
-
-erro_saude_pct = np.mean(np.abs(sim_saude_valid - real_saude.values) / real_saude.values * 100)
-erro_educ_pct = np.mean(np.abs(sim_educ_valid - real_educ.values) / real_educ.values * 100)
-
-# 3. Cálculo do Erro Total
-erro_total_medio = (erro_pop_pct + erro_pib_pct + erro_saude_pct + erro_educ_pct) / 4
-
-# --- Exibição no Streamlit ---
-st.markdown("---") 
-st.subheader("Precisão do Modelo (Calibragem 2015-2021)")
-
-# 1. Mostra APENAS o Erro Global em destaque
-col_total, col_vazia = st.columns([1, 3]) # Ajustei a proporção para ficar mais canto esquerdo
-with col_total:
-    st.metric("Erro Global Médio", f"{erro_total_medio:.2f}%", 
-              help="Média geral dos erros. Clique abaixo para ver os detalhes.")
-
-# 2. Cria o Dropdown (Expander) para os detalhes
-with st.expander("Ver detalhes dos erros por setor"):
-    st.write("Detalhamento do erro percentual médio:")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Erro População", f"{erro_pop_pct:.2f}%")
-    with c2:
-        st.metric("Erro PIB", f"{erro_pib_pct:.2f}%")
-    with c3:
-        st.metric("Erro Saúde", f"{erro_saude_pct:.2f}%")
-    with c4:
-        st.metric("Erro Educação", f"{erro_educ_pct:.2f}%")
-    
-    st.caption("Nota: O erro é calculado comparando a simulação com os dados reais do IBGE/SIOPS de 2015 a 2021.")
-
-st.markdown("---")
-
-# =========================================================
 # Resultados numéricos (HÍBRIDO: COMPLETO ATÉ BILHÃO)
 # =========================================================
 
@@ -604,6 +541,72 @@ with col6:
         f"{escolaridade_final:.2f} anos",
         help=f"Média de anos de estudo da população adulta"
     )
+
+# =========================================================
+# Taxa de erro histórica (CÁLCULO DETALHADO - CORRIGIDO)
+# =========================================================
+
+# 1. Erros de População e PIB
+# A simulação gera dados a partir de 2015 (índice 1 em diante da lista total_pop)
+sim_pop_hist = out_hist['total_pop'][1:anos_historicos+1] 
+sim_pib_hist = out_hist['pib'][:anos_historicos]
+
+# Comparamos com dados reais a partir de 2015 também
+real_pop_hist = df_hist['populacao_real'].values[1:] 
+real_pib_hist = df_hist['pib_real'].values[1:]
+
+erro_pop_pct = np.mean(np.abs(sim_pop_hist - real_pop_hist) / real_pop_hist * 100)
+erro_pib_pct = np.mean(np.abs(sim_pib_hist - real_pib_hist) / real_pib_hist * 100)
+
+# 2. Erros de Saúde e Educação (temos dados apenas para 2020-2021)
+real_saude = df_hist['gasto_saude_real'].dropna()
+real_educ = df_hist['gasto_educ_real'].dropna()
+
+# Identificamos quais anos têm dados
+anos_com_dados = real_saude.index.values
+
+# CORREÇÃO AQUI: Subtraímos (ano_inicial + 1) porque a lista de gastos simulados começa em 2015
+indices_validos = [ano - (ano_inicial + 1) for ano in anos_com_dados]
+
+# Agora pegamos os valores simulados usando os índices corretos
+sim_saude_valid = np.array(out_hist['gasto_saude'])[indices_validos]
+sim_educ_valid = np.array(out_hist['gasto_educ'])[indices_validos]
+
+erro_saude_pct = np.mean(np.abs(sim_saude_valid - real_saude.values) / real_saude.values * 100)
+erro_educ_pct = np.mean(np.abs(sim_educ_valid - real_educ.values) / real_educ.values * 100)
+
+# 3. Cálculo do Erro Total
+erro_total_medio = (erro_pop_pct + erro_pib_pct + erro_saude_pct + erro_educ_pct) / 4
+
+# --- Exibição no Streamlit ---
+st.markdown("---") 
+st.subheader("Precisão do Modelo (Calibragem 2015-2021)")
+
+# 1. Mostra APENAS o Erro Global em destaque
+col_total, col_vazia = st.columns([1, 3]) # Ajustei a proporção para ficar mais canto esquerdo
+with col_total:
+    st.metric("Erro Global Médio", f"{erro_total_medio:.2f}%", 
+              help="Média geral dos erros. Clique abaixo para ver os detalhes.")
+
+# 2. Cria o Dropdown (Expander) para os detalhes
+with st.expander("Ver detalhes dos erros por setor"):
+    st.write("Detalhamento do erro percentual médio:")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Erro População", f"{erro_pop_pct:.2f}%")
+    with c2:
+        st.metric("Erro PIB", f"{erro_pib_pct:.2f}%")
+    with c3:
+        st.metric("Erro Saúde", f"{erro_saude_pct:.2f}%")
+    with c4:
+        st.metric("Erro Educação", f"{erro_educ_pct:.2f}%")
+    
+    st.caption("Nota: O erro é calculado comparando a simulação com os dados reais do IBGE/SIOPS de 2015 a 2021.")
+
+st.markdown("---")
+
+
+
 
 # =========================================================
 # Gráfico da população
