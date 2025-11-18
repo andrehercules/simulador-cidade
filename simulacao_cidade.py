@@ -511,44 +511,99 @@ erro_total_medio = (erro_pop_pct + erro_pib_pct + erro_saude_pct + erro_educ_pct
 
 # --- Exibição no Streamlit ---
 st.markdown("---") 
-st.subheader("📊 Precisão do Modelo (Calibragem 2015-2021)")
+st.subheader("Precisão do Modelo (Calibragem 2015-2021)")
 
-col_total, col_vazia = st.columns([1, 2])
+# 1. Mostra APENAS o Erro Global em destaque
+col_total, col_vazia = st.columns([1, 3]) # Ajustei a proporção para ficar mais canto esquerdo
 with col_total:
     st.metric("Erro Global Médio", f"{erro_total_medio:.2f}%", 
-              help="Média dos erros percentuais de População, PIB, Saúde e Educação.")
+              help="Média geral dos erros. Clique abaixo para ver os detalhes.")
 
-st.write("Detalhamento do erro por setor:")
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    st.metric("Erro População", f"{erro_pop_pct:.2f}%")
-with c2:
-    st.metric("Erro PIB", f"{erro_pib_pct:.2f}%")
-with c3:
-    st.metric("Erro Saúde", f"{erro_saude_pct:.2f}%")
-with c4:
-    st.metric("Erro Educação", f"{erro_educ_pct:.2f}%")
+# 2. Cria o Dropdown (Expander) para os detalhes
+with st.expander("Ver detalhes dos erros por setor"):
+    st.write("Detalhamento do erro percentual médio:")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Erro População", f"{erro_pop_pct:.2f}%")
+    with c2:
+        st.metric("Erro PIB", f"{erro_pib_pct:.2f}%")
+    with c3:
+        st.metric("Erro Saúde", f"{erro_saude_pct:.2f}%")
+    with c4:
+        st.metric("Erro Educação", f"{erro_educ_pct:.2f}%")
+    
+    st.caption("Nota: O erro é calculado comparando a simulação com os dados reais do IBGE/SIOPS de 2015 a 2021.")
 
 st.markdown("---")
 
 # =========================================================
-# Resultados numéricos
+# Resultados numéricos (HÍBRIDO: COMPLETO ATÉ BILHÃO)
 # =========================================================
+
+# Função auxiliar para essa lógica específica (Smart Format)
+def formatar_smart(valor, prefixo="R$ "):
+    if valor >= 1e9: # Se for Bilhão ou mais, abrevia
+        return f"{prefixo}{valor/1e9:.2f} bi"
+    else: # Se for Milhão ou menos, mostra completo com separadores
+        # {:,.2f} coloca vírgula nos milhares e ponto no decimal (padrão internacional)
+        return f"{prefixo}{valor:,.2f}"
+
 col1, col2, col3 = st.columns(3)
+
 with col1:
-    st.metric("População Total", f"{out_proj['total_pop'][-1]:,.0f} habitantes")
+    pop_final = out_proj['total_pop'][-1]
+    st.metric(
+        "População Total", 
+        f"{pop_final:,.0f}", # População sempre mostra completa (ex: 62,372)
+        help=f"Valor exato: {pop_final:,.0f} habitantes"
+    )
+
 with col2:
-    st.metric("PIB Total", f"R$ {out_proj['pib'][-1]:,.2f}")
+    pib_final = out_proj['pib'][-1]
+    # AQUI ESTÁ A MÁGICA: Só abrevia se passar de 1 Bilhão
+    st.metric(
+        "PIB Total", 
+        formatar_smart(pib_final), 
+        help=f"Valor exato: R$ {pib_final:,.2f}"
+    )
+
 with col3:
-    st.metric("PIB per Capita", f"R$ {out_proj['pib_per_capita'][-1]:,.2f}")
+    pib_pc_final = out_proj['pib_per_capita'][-1]
+    # PIB per capita dificilmente passa de bilhão, então mostrará completo
+    st.metric(
+        "PIB per Capita", 
+        formatar_smart(pib_pc_final),
+        help=f"Valor exato: R$ {pib_pc_final:,.2f}"
+    )
+
+st.markdown("### Indicadores Sociais")
 
 col4, col5, col6 = st.columns(3)
+
 with col4:
-    st.metric("Gasto com Educação", f"R$ {out_proj['gasto_educ'][-1]:,.2f}")
+    gasto_educ_final = out_proj['gasto_educ'][-1]
+    # Gastos (Milhões) mostrarão completos
+    st.metric(
+        "Gasto com Educação", 
+        formatar_smart(gasto_educ_final),
+        help=f"Valor exato: R$ {gasto_educ_final:,.2f}"
+    )
+
 with col5:
-    st.metric("Gasto com Saúde", f"R$ {out_proj['gasto_saude'][-1]:,.2f}")
+    gasto_saude_final = out_proj['gasto_saude'][-1]
+    st.metric(
+        "Gasto com Saúde", 
+        formatar_smart(gasto_saude_final),
+        help=f"Valor exato: R$ {gasto_saude_final:,.2f}"
+    )
+
 with col6:
-    st.metric("Escolaridade Média", f"{out_proj['nivel_escolaridade_medio'][-1]:.2f} anos")
+    escolaridade_final = out_proj['nivel_escolaridade_medio'][-1]
+    st.metric(
+        "Escolaridade Média", 
+        f"{escolaridade_final:.2f} anos",
+        help=f"Média de anos de estudo da população adulta"
+    )
 
 # =========================================================
 # Gráfico da população
