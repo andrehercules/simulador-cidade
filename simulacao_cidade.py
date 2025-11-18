@@ -222,9 +222,17 @@ def run_simulation(fert_scale=1.0, mort_scale=1.0, mig_scale=1.0,
                    fert_increase_pct=0.0, anos_simular=50, pop_f_ini=None, pop_m_ini=None,
                    return_history=False,
                    param_custo_aluno=2500.0, param_gasto_saude_pc=1500.0,
-                   invest_educ_pct=0.0, invest_saude_pct=0.0    ):
+                   invest_educ_pct=0.0, invest_saude_pct=0.0):
+    
     fert_local = fert_by_age * fert_scale * (1 + fert_increase_pct)
     mort_local = mort_by_age_base * mort_scale
+    
+    # ### NOVO: Ajuste da mortalidade pelo investimento em Saúde ###
+    # Se investir mais em saúde, a mortalidade cai um pouco (até 20% de melhora)
+    if not return_history and invest_saude_pct != 0:
+        fator_saude = 1.0 - (invest_saude_pct * 0.2) # 0.2 é a sensibilidade
+        mort_local = mort_local * fator_saude
+
     mig_total_local = mig_total_base * mig_scale
 
     pop_f = np.zeros((anos_simular + 1, max_idade + 1))
@@ -241,60 +249,75 @@ def run_simulation(fert_scale=1.0, mort_scale=1.0, mig_scale=1.0,
 
     taxa_desemprego_ano_anterior = desemprego_base
 
-    # --- Calibrar produtividade inicial para PIB de 2014 ---
+    # --- Calibrar produtividade inicial ---
     pop_work_ini = np.sum(pop_f_ini[work_start:work_end+1] + pop_m_ini[work_start:work_end+1])
     produtividade_setorial_ini = sum(np.array(list(produtividade_base.values())) * np.array(list(participacao_setores.values())))
     fator_escala_pib = df_hist['pib_real'].iloc[0] / (pop_work_ini * produtividade_setorial_ini)
 
+    # ### NOVO: Variáveis acumuladoras de progresso ###
+    # Elas guardam o quanto a cidade melhorou ano após ano
+    multiplicador_produtividade = 1.0
+    bonus_escolarizacao = 0.0
+
     for t in range(anos_simular):
+        # ### NOVO: Lógica de Impacto do Investimento (Feedback Loop) ###
+        if not return_history:
+            # 1. Educação impacta Produtividade (PIB)
+            # Se investir +10%, a produtividade cresce 0.5% ao ano (juros compostos)
+            ganho_produtividade = invest_educ_pct * 0.05 
+            multiplicador_produtividade *= (1 + ganho_produtividade)
+            
+            # 2. Educação impacta Taxa de Matrícula
+            # Se investir, aumenta a porcentagem de alunos na escola
+            bonus_escolarizacao += (invest_educ_pct * 0.005) # Cresce devagar
+            # Limita o bônus para não passar de 100% de matrícula
+            bonus_escolarizacao = min(0.15, max(-0.10, bonus_escolarizacao))
+
+        # Atualiza as taxas de escolarização com o bônus
+        percent_escolarizacao_atual = {k: min(1.0, v + bonus_escolarizacao) for k, v in percent_escolarizacao.items()}
+
+        # --- Dinâmica Populacional (sem alterações) ---
         popf = pop_f[t, :].copy()
         popm = pop_m[t, :].copy()
-
         sobreviventes_f = popf * (1 - mort_local)
         sobreviventes_m = popm * (1 - mort_local)
-
         new_pop_f = np.zeros_like(popf)
         new_pop_m = np.zeros_like(popm)
         new_pop_f[1:] = sobreviventes_f[:-1]
         new_pop_m[1:] = sobreviventes_m[:-1]
-
-        # Nascimentos
         nascimentos = np.sum(sobreviventes_f * fert_local)
         new_pop_f[0] = nascimentos * sexo_ratio_f
         new_pop_m[0] = nascimentos * (1 - sexo_ratio_f)
-
-        # Migração
         mig_in = mig_total_local * mig_by_age_dist
         new_pop_f += mig_in * sexo_ratio_f
         new_pop_m += mig_in * (1 - sexo_ratio_f)
-
         pop_f[t+1, :] = new_pop_f
         pop_m[t+1, :] = new_pop_m
-
         pop_total_t1 = new_pop_f.sum() + new_pop_m.sum()
         total_pop.append(pop_total_t1)
 
-        # Mercado de trabalho e PIB
+        # --- Mercado de trabalho e PIB (Impactado pela Produtividade) ---
         pop_work = np.sum(new_pop_f[work_start:work_end+1] + new_pop_m[work_start:work_end+1])
         taxa_desemprego = max(0.01, min(0.45, 0.7 * taxa_desemprego_ano_anterior + 0.3 * desemprego_base))
         trabalhadores_ativos = pop_work * (1 - taxa_desemprego)
         taxa_desemprego_ano_anterior = taxa_desemprego
 
         produtividade_setorial = sum(np.array(list(produtividade_base.values())) * np.array(list(participacao_setores.values())))
-        pib_atual = trabalhadores_ativos * produtividade_setorial * fator_escala_pib
+        
+        # AQUI A MÁGICA: Multiplicamos pela produtividade acumulada
+        pib_atual = trabalhadores_ativos * produtividade_setorial * fator_escala_pib * multiplicador_produtividade
+        
         pib.append(pib_atual)
         pib_per_capita.append(pib_atual / pop_total_t1 if pop_total_t1 > 0 else 0.0)
 
-        # Educação e saúde
+        # --- Educação e Saúde (Impactado pelo Custo) ---
         idade_inicio_fund = 6
-        alunos_f = new_pop_f[idade_inicio_fund:idade_inicio_fund+anos_fund].sum() * percent_escolarizacao['fund']
+        # Usa a porcentagem atualizada com o bônus
+        alunos_f = new_pop_f[idade_inicio_fund:idade_inicio_fund+anos_fund].sum() * percent_escolarizacao_atual['fund']
         
-        # 1. Calcula o gasto "base" (calibrado)
         gasto_e_base = alunos_f * param_custo_aluno
         gasto_s_base = pop_total_t1 * param_gasto_saude_pc
         
-        # 2. Aplica o ajuste do slider (só funciona se a simulação NÃO for histórica)
-        #    (Não queremos aplicar o slider do usuário no cálculo de 2014-2021)
         if not return_history:
             gasto_e = gasto_e_base * (1 + invest_educ_pct)
             gasto_s = gasto_s_base * (1 + invest_saude_pct)
@@ -305,14 +328,15 @@ def run_simulation(fert_scale=1.0, mort_scale=1.0, mig_scale=1.0,
         gasto_saude.append(gasto_s)
         gasto_educacao.append(gasto_e)
 
-        # --- Escolaridade média ---
-        pop_total_array = new_pop_f + new_pop_m
-        anos_cursados_efetivos = 0
-        for nivel, perc in percent_escolarizacao.items():
-            anos_n = anos_nivel[nivel]
-            pop_ativa_nivel = pop_total_array[idade_inicio_fund:idade_inicio_fund+anos_n].sum() * perc
-            anos_cursados_efetivos += pop_ativa_nivel * anos_n
-        nivel_escolaridade_medio = anos_cursados_efetivos / pop_total_t1
+        # --- Escolaridade média (Correção Conceitual Simplificada) ---
+        # Vamos calcular a escolaridade média da população adulta (25+ anos)
+        # Assumindo que o investimento melhora a média ao longo do tempo
+        
+        # Valor base de escolaridade (chute calibrado aproximado: 7 anos)
+        escolaridade_base = 7.0 
+        # O multiplicador de produtividade serve como proxy para o ganho de educação da força de trabalho
+        nivel_escolaridade_medio = escolaridade_base * multiplicador_produtividade
+        
         nivel_escolaridade_medio_hist.append(nivel_escolaridade_medio)
 
     outputs = {
