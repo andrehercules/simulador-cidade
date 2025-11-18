@@ -1,46 +1,75 @@
-# app_fertilidade_calibrada_salgueiro.py
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
 from matplotlib.ticker import FuncFormatter
-import numpy as np
 
 try:
     from scipy.optimize import minimize
 except ImportError:
     minimize = None
 
-# --- Configurações iniciais ---
+# ==============================================================================
+# 1. CONFIGURAÇÕES E DADOS INICIAIS
+# ==============================================================================
+
+# Parâmetros de Tempo e População Base
 ano_inicial = 2014
 ano_projecao = 2021
 anos_historicos = ano_projecao - ano_inicial
 anos_projecao = 50
 max_idade = 100
-pop_inicial_total = 56629  # população estimada de 2014
+pop_inicial_total = 56629
 sexo_ratio_f = 0.51
 
-# --- Distribuição etária (BASEADA NO CENSO 2010 REAL) ---
+# Dados do Censo 2010 (Estrutura Etária Real)
+censo_data_f = {
+    '0 a 4 anos': 2459, '5 a 9 anos': 2640, '10 a 14 anos': 2661,
+    '15 a 19 anos': 2632, '20 a 24 anos': 2765, '25 a 29 anos': 2512,
+    '30 a 39 anos': 4432, '40 a 49 anos': 3421, '50 a 59 anos': 2238,
+    '60 a 69 anos': 1587, '70 ou mais': 1678
+}
+censo_data_m = {
+    '0 a 4 anos': 2622, '5 a 9 anos': 2675, '10 a 14 anos': 2820,
+    '15 a 19 anos': 2550, '20 a 24 anos': 2774, '25 a 29 anos': 2563,
+    '30 a 39 anos': 4348, '40 a 49 anos': 3070, '50 a 59 anos': 1907,
+    '60 a 69 anos': 1252, '70 ou mais': 1023
+}
+
+# Dados Históricos Reais (IBGE/SIOPS/SIOPE)
+dados_historicos = {
+    'ano': [2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021],
+    'populacao_real': [56629, 57000, 58000, 59000, 60000, 61000, 62000, 62500],
+    'pib_real': [
+        776670000.52, 744482000.30, 784308000.63, 792337000.75,
+        858899000.62, 975936000.10, 969253000.11, 1002105000.38
+    ],
+    'gasto_saude_real': [np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, 33194847.29, 42141035.96],
+    'gasto_educ_real': [np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, 38997905.83, 50890153.21]
+}
+df_hist = pd.DataFrame(dados_historicos).set_index('ano')
+
+# Parâmetros Econômicos Base
+work_start, work_end = 18, 64
+desemprego_base = 0.07
+produtividade_base = {'agro': 30000, 'industria': 35000, 'servicos': 50000}
+participacao_setores = {'agro': 0.0145, 'industria': 0.1398, 'servicos': 0.8457}
+percent_escolarizacao = {'fund': 0.98, 'medio': 0.85, 'superior': 0.30}
+anos_nivel = {'fund': 9, 'medio': 3, 'superior': 4}
+anos_fund = 9
+
+# ==============================================================================
+# 2. FUNÇÕES AUXILIARES (Dist, Formatação)
+# ==============================================================================
 
 def distribute_age_groups(censo_groups, total_pop_scaled, max_age=100):
-    """
-    Pega os grupos de idade do Censo (dicionário) e o total da população
-    desejada, e distribui por idades únicas (0 a 100).
-    """
     pop_array = np.zeros(max_age + 1)
     total_censo_pop = sum(censo_groups.values())
-    
-    # Se o total do censo for zero, não faz nada
-    if total_censo_pop == 0:
-        return pop_array
+    if total_censo_pop == 0: return pop_array
 
     for group_key, pop_censo in censo_groups.items():
-        # Calcula a proporção deste grupo no Censo
         proportion = pop_censo / total_censo_pop
-        # Aplica a proporção ao total desejado (ex: pop 2014)
         scaled_group_pop = proportion * total_pop_scaled
-        
-        # Determina as idades de início e fim do grupo
         if 'ou mais' in group_key:
             start_age = int(group_key.split(' ')[0])
             end_age = max_age
@@ -51,138 +80,176 @@ def distribute_age_groups(censo_groups, total_pop_scaled, max_age=100):
         
         num_years = end_age - start_age + 1
         pop_per_year = scaled_group_pop / num_years
-        
         pop_array[start_age : end_age + 1] = pop_per_year
     
-    # Re-normaliza para garantir que a soma bate exatamente com o total
-    # (corrige erros de arredondamento)
-    current_sum = pop_array.sum()
-    if current_sum > 0:
-        pop_array = (pop_array / current_sum) * total_pop_scaled
-    
+    if pop_array.sum() > 0:
+        pop_array = (pop_array / pop_array.sum()) * total_pop_scaled
     return pop_array
 
-# Dados do CENSO 2010 (dos seus prints)
-censo_data_f = {
-    '0 a 4 anos': 2459,
-    '5 a 9 anos': 2640,
-    '10 a 14 anos': 2661,
-    '15 a 19 anos': 2632,
-    '20 a 24 anos': 2765,
-    '25 a 29 anos': 2512,
-    '30 a 39 anos': 4432,  # Grupo de 10 anos
-    '40 a 49 anos': 3421,  # Grupo de 10 anos
-    '50 a 59 anos': 2238,  # Grupo de 10 anos
-    '60 a 69 anos': 1587,  # Grupo de 10 anos
-    '70 ou mais': 1678
-}
+def formatar_valor(valor, pos):
+    if valor >= 1e9: return f"R$ {valor/1e9:.1f} bi"
+    elif valor >= 1e6: return f"R$ {valor/1e6:.1f} mi"
+    else: return f"R$ {valor:.0f}"
 
-censo_data_m = {
-    '0 a 4 anos': 2622,
-    '5 a 9 anos': 2675,
-    '10 a 14 anos': 2820,
-    '15 a 19 anos': 2550,
-    '20 a 24 anos': 2774,
-    '25 a 29 anos': 2563,
-    '30 a 39 anos': 4348,  # Grupo de 10 anos
-    '40 a 49 anos': 3070,  # Grupo de 10 anos
-    '50 a 59 anos': 1907,  # Grupo de 10 anos
-    '60 a 69 anos': 1252,  # Grupo de 10 anos
-    '70 ou mais': 1023
-}
+def formatar_habitantes(valor, pos):
+    if valor >= 1e6: return f"{valor/1e6:.2f} mi"
+    elif valor >= 1e3: return f"{valor/1e3:.0f} mil"
+    else: return f"{valor:.0f}"
 
-# Separa a população total de 2014 (dado inicial) pelo sexo_ratio
-pop_inicial_f_total = pop_inicial_total * sexo_ratio_f
-pop_inicial_m_total = pop_inicial_total * (1 - sexo_ratio_f)
+def formatar_smart(valor, prefixo="R$ "):
+    if valor >= 1e9: return f"{prefixo}{valor/1e9:.2f} bi"
+    else: return f"{prefixo}{valor:,.2f}"
 
-# Cria as populações iniciais REAIS
-pop_inicial_f = distribute_age_groups(censo_data_f, pop_inicial_f_total, max_idade)
-pop_inicial_m = distribute_age_groups(censo_data_m, pop_inicial_m_total, max_idade)
+# Inicialização das Curvas Demográficas
+pop_inicial_f = distribute_age_groups(censo_data_f, pop_inicial_total * sexo_ratio_f, max_idade)
+pop_inicial_m = distribute_age_groups(censo_data_m, pop_inicial_total * (1 - sexo_ratio_f), max_idade)
 
-# --- Fertilidade, mortalidade e migração (MODELOS REALISTAS) ---
-
-# 1. FERTILIDADE (Curva com pico)
-# Modelo que simula um pico de fertilidade (ex: pico aos 28 anos)
-# e resulta numa Taxa de Fecundidade Total (TFR) de aprox. 2.23
 fert_by_age = np.zeros(max_idade + 1)
-start_age = 15
-peak_age = 28
-end_age = 49
-peak_fert = 0.12  # Taxa máxima no pico
-
-# Aumento da fertilidade da idade inicial até o pico
-n_rise = peak_age - start_age + 1
-fert_by_age[start_age : peak_age + 1] = np.linspace(0.02, peak_fert, n_rise)
-
-# Queda da fertilidade do pico até o fim do período fértil
-n_fall = end_age - peak_age
-fert_by_age[peak_age + 1 : end_age + 1] = np.linspace(peak_fert * 0.95, 0.005, n_fall)
-
-# 2. MORTALIDADE (Curva "Banheira" ou "Jota")
-# Modelo baseado em interpolação de pontos-chave, simulando
-# uma "curva de banheira" (mortalidade infantil alta, cai na juventude,
-# e sobe exponencialmente na velhice).
-# Valores aproximados com base em tábuas de vida reais (ex: IBGE).
-mort_key_ages =  [0,   1,     15,     30,     60,   80,    100]
-mort_key_rates = [0.012, 0.001, 0.0006, 0.0015, 0.01, 0.07,  0.5] # Taxas de mortalidade (qx)
+fert_by_age[15:29] = np.linspace(0.02, 0.12, 14)
+fert_by_age[29:50] = np.linspace(0.12 * 0.95, 0.005, 21)
 
 all_ages = np.arange(max_idade + 1)
-mort_by_age_base = np.interp(all_ages, mort_key_ages, mort_key_rates)
+mort_by_age_base = np.interp(all_ages, [0, 1, 15, 30, 60, 80, 100], [0.012, 0.001, 0.0006, 0.0015, 0.01, 0.07, 0.5])
 
-mig_total_base = 150
 mig_by_age_dist = np.zeros(max_idade + 1)
 mig_by_age_dist[20:41] = 1
 mig_by_age_dist /= mig_by_age_dist.sum()
+mig_total_base = 150
 
-# --- Educação e mercado de trabalho ---
-work_start, work_end = 18, 64
-desemprego_base = 0.07
-produtividade_base = {'agro': 30000, 'industria': 35000, 'servicos': 50000}
-participacao_setores = {
-    'agro': 0.0145,       # (1.45%)
-    'industria': 0.1398,  # (13.98%)
-    'servicos': 0.8457    # (84.57%)
-}
+# ==============================================================================
+# 3. MOTOR DE SIMULAÇÃO
+# ==============================================================================
 
-percent_escolarizacao = {
-    'fund': 0.98,
-    'medio': 0.85,
-    'superior': 0.30
-}
-anos_nivel = {'fund': 9, 'medio': 3, 'superior': 4}
-anos_fund = 9
-anos_custeio_educ = anos_fund
+def run_simulation(fert_scale=1.0, mort_scale=1.0, mig_scale=1.0,
+                   fert_increase_pct=0.0, anos_simular=50, pop_f_ini=None, pop_m_ini=None,
+                   return_history=False,
+                   param_custo_aluno=2500.0, param_gasto_saude_pc=1500.0,
+                   invest_educ_pct=0.0, invest_saude_pct=0.0):
+    
+    fert_local = fert_by_age * fert_scale * (1 + fert_increase_pct)
+    mort_local = mort_by_age_base * mort_scale
+    
+    # Feedback: Investimento em saúde reduz mortalidade
+    if invest_saude_pct != 0:
+        fator_saude = 1.0 - (invest_saude_pct * 0.2)
+        mort_local = mort_local * fator_saude
 
-# --- Dados históricos reais de Salgueiro (PE) ---
-# DADOS 100% REAIS (2014-2021)
-dados_historicos = {
-    # Período histórico ajustado para 2014-2021 (8 anos)
-    'ano': [2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021],
+    mig_total_local = mig_total_base * mig_scale
+    pop_f = np.zeros((anos_simular + 1, max_idade + 1))
+    pop_m = np.zeros((anos_simular + 1, max_idade + 1))
+    pop_f[0, :] = pop_f_ini.copy()
+    pop_m[0, :] = pop_m_ini.copy()
 
-    # População (removido o dado de 2022)
-    'populacao_real': [56629, 57000, 58000, 59000, 60000, 61000, 62000, 62500],
+    total_pop = [pop_f_ini.sum() + pop_m_ini.sum()]
+    pib, gasto_educacao, gasto_saude, nivel_escolaridade_medio_hist = [], [], [], []
+    pib_per_capita = []
 
-    # Série do PIB REAL (da sua imagem)
-    'pib_real': [
-        776670000.52, 744482000.30, 784308000.63, 792337000.75,
-        858899000.62, 975936000.10, 969253000.11, 1002105000.38
-    ],
+    # Calibração Inicial do PIB
+    pop_work_ini = np.sum(pop_f_ini[work_start:work_end+1] + pop_m_ini[work_start:work_end+1])
+    prod_set_ini = sum(np.array(list(produtividade_base.values())) * np.array(list(participacao_setores.values())))
+    fator_escala_pib = df_hist['pib_real'].iloc[0] / (pop_work_ini * prod_set_ini)
 
-    # Gastos reais (removido os dados de 2022) - AGORA CORRIGIDO
-    'gasto_saude_real': [
-        np.nan, np.nan, np.nan, np.nan, np.nan, np.nan,
-        33194847.29, 42141035.96  # 2020 e 2021
-    ],
-    'gasto_educ_real': [
-        np.nan, np.nan, np.nan, np.nan, np.nan, np.nan,
-        38997905.83, 50890153.21  # 2020 e 2021
-    ]
-}
-df_hist = pd.DataFrame(dados_historicos).set_index('ano')
+    # Variáveis de Feedback
+    multiplicador_produtividade = 1.0
+    bonus_escolarizacao = 0.0
+    taxa_desemprego_ant = desemprego_base
 
-# =========================================================
-# Interface Streamlit
-# =========================================================
+    for t in range(anos_simular):
+        # Lógica de Feedback: Educação impacta Produtividade
+        # Se for histórico (invest_educ_pct=0), não muda nada.
+        ganho_produtividade = invest_educ_pct * 0.015 # 1.5% ao ano max
+        multiplicador_produtividade *= (1 + ganho_produtividade)
+        
+        bonus_escolarizacao += (invest_educ_pct * 0.005)
+        bonus_escolarizacao = min(0.15, max(-0.10, bonus_escolarizacao))
+        
+        perc_educ_atual = {k: min(1.0, v + bonus_escolarizacao) for k, v in percent_escolarizacao.items()}
+
+        # Dinâmica Populacional
+        popf, popm = pop_f[t].copy(), pop_m[t].copy()
+        sob_f, sob_m = popf * (1 - mort_local), popm * (1 - mort_local)
+        new_f, new_m = np.zeros_like(popf), np.zeros_like(popm)
+        new_f[1:], new_m[1:] = sob_f[:-1], sob_m[:-1]
+        
+        nasc = np.sum(sob_f * fert_local)
+        new_f[0], new_m[0] = nasc * sexo_ratio_f, nasc * (1 - sexo_ratio_f)
+        
+        mig_in = mig_total_local * mig_by_age_dist
+        new_f += mig_in * sexo_ratio_f
+        new_m += mig_in * (1 - sexo_ratio_f)
+        
+        pop_f[t+1], pop_m[t+1] = new_f, new_m
+        total_pop.append(new_f.sum() + new_m.sum())
+
+        # Economia
+        pop_work = np.sum(new_f[work_start:work_end+1] + new_m[work_start:work_end+1])
+        taxa_desemprego_ant = max(0.01, min(0.45, 0.7 * taxa_desemprego_ant + 0.3 * desemprego_base))
+        
+        prod_setorial = sum(np.array(list(produtividade_base.values())) * np.array(list(participacao_setores.values())))
+        pib_atual = (pop_work * (1 - taxa_desemprego_ant)) * prod_setorial * fator_escala_pib * multiplicador_produtividade
+        
+        pib.append(pib_atual)
+        pib_per_capita.append(pib_atual / (new_f.sum() + new_m.sum()) if (new_f.sum() + new_m.sum()) > 0 else 0)
+
+        # Gastos Sociais
+        alunos = new_f[6:15].sum() * perc_educ_atual['fund']
+        gasto_e = alunos * param_custo_aluno * (1 + invest_educ_pct)
+        gasto_s = (new_f.sum() + new_m.sum()) * param_gasto_saude_pc * (1 + invest_saude_pct)
+        
+        gasto_educacao.append(gasto_e)
+        gasto_saude.append(gasto_s)
+
+        # Escolaridade Média (Com Trava Lógica)
+        escolaridade_base = 7.0 
+        nivel_educ = escolaridade_base * multiplicador_produtividade
+        nivel_educ = min(16.0, nivel_educ) # Trava em 16 anos (Nível Superior Completo)
+        nivel_escolaridade_medio_hist.append(nivel_educ)
+
+    outputs = {
+        "total_pop": np.array(total_pop), "pib": np.array(pib), 
+        "pib_per_capita": np.array(pib_per_capita),
+        "gasto_saude": np.array(gasto_saude), "gasto_educ": np.array(gasto_educacao),
+        "nivel_escolaridade_medio": np.array(nivel_escolaridade_medio_hist)
+    }
+    if return_history:
+        outputs.update({"pop_f": pop_f, "pop_m": pop_m})
+    return outputs
+
+# ==============================================================================
+# 4. CALIBRAÇÃO AUTOMÁTICA
+# ==============================================================================
+
+def calibration_objective(x):
+    fert_s, mort_s, mig_s, custo_a, saude_pc = x
+    out = run_simulation(fert_s, mort_s, mig_s, anos_simular=anos_historicos, 
+                         pop_f_ini=pop_inicial_f, pop_m_ini=pop_inicial_m,
+                         param_custo_aluno=custo_a, param_gasto_saude_pc=saude_pc)
+    
+    sim_pop = out['total_pop'][1:]
+    sim_pib = out['pib'][:anos_historicos]
+    
+    real_pop = df_hist['populacao_real'].values[1:]
+    real_pib = df_hist['pib_real'].values[1:]
+    
+    # Alinhamento dos Gastos (apenas anos com dados)
+    idx_dados = df_hist['gasto_saude_real'].dropna().index - ano_inicial - 1
+    sim_saude = np.array(out['gasto_saude'])[idx_dados]
+    sim_educ = np.array(out['gasto_educ'])[idx_dados]
+    real_saude = df_hist['gasto_saude_real'].dropna().values
+    real_educ = df_hist['gasto_educ_real'].dropna().values
+
+    mae_pop = np.mean(np.abs(sim_pop - real_pop))
+    mae_pib = np.mean(np.abs(sim_pib - real_pib))
+    mae_saude = np.mean(np.abs(sim_saude - real_saude))
+    mae_educ = np.mean(np.abs(sim_educ - real_educ))
+
+    return (0.2 * (mae_pop/real_pop.mean()) + 0.2 * (mae_pib/real_pib.mean()) +
+            0.3 * (mae_saude/real_saude.mean()) + 0.3 * (mae_educ/real_educ.mean()))
+
+# ==============================================================================
+# 5. INTERFACE STREAMLIT
+# ==============================================================================
+
 st.set_page_config(layout="wide")
 st.title("Simulador: Fertilidade e Impacto Econômico")
 st.write(f"Período histórico: {ano_inicial} a {ano_projecao}. Projeção até {ano_projecao + anos_projecao}.")
@@ -194,478 +261,121 @@ invest_saude_pct = st.sidebar.slider("Variação no Investimento em Saúde (%)",
 ano_usuario = st.sidebar.slider("Selecione o ano da projeção", min_value=ano_projecao+1,
                                 max_value=ano_projecao+anos_projecao, value=ano_projecao+10)
 
-# =========================================================
-# Função para formatar valores nos eixos
-# =========================================================
-def formatar_valor(valor, pos):
-    if valor >= 1e9:
-        return f"R$ {valor/1e9:.1f} bi"
-    elif valor >= 1e6:
-        return f"R$ {valor/1e6:.1f} mi"
-    elif valor >= 1e3:
-        return f"R$ {valor/1e3:.0f} mil"
-    else:
-        return f"R$ {valor:.0f}"
+# Execução da Calibração (Background)
+initial_guess = [1.0, 1.0, 1.0, 4500.0, 600.0]
+param_bounds = [(0.5, 1.5), (0.7, 1.3), (0.2, 5.0), (3500.0, 12000.0), (300.0, 2000.0)]
 
-def formatar_habitantes(valor, pos):
-    if valor >= 1e6:
-        return f"{valor/1e6:.2f} mi"
-    elif valor >= 1e3:
-        return f"{valor/1e3:.0f} mil"
-    else:
-        return f"{valor:.0f}"
-
-# =========================================================
-# Função de simulação com PIB calibrado
-# =========================================================
-def run_simulation(fert_scale=1.0, mort_scale=1.0, mig_scale=1.0,
-                   fert_increase_pct=0.0, anos_simular=50, pop_f_ini=None, pop_m_ini=None,
-                   return_history=False,
-                   param_custo_aluno=2500.0, param_gasto_saude_pc=1500.0,
-                   invest_educ_pct=0.0, invest_saude_pct=0.0):
-    
-    fert_local = fert_by_age * fert_scale * (1 + fert_increase_pct)
-    mort_local = mort_by_age_base * mort_scale
-    
-    # ### NOVO: Ajuste da mortalidade pelo investimento em Saúde ###
-    # Se investir mais em saúde, a mortalidade cai um pouco (até 20% de melhora)
-    if not return_history and invest_saude_pct != 0:
-        fator_saude = 1.0 - (invest_saude_pct * 0.2) # 0.2 é a sensibilidade
-        mort_local = mort_local * fator_saude
-
-    mig_total_local = mig_total_base * mig_scale
-
-    pop_f = np.zeros((anos_simular + 1, max_idade + 1))
-    pop_m = np.zeros((anos_simular + 1, max_idade + 1))
-    pop_f[0, :] = pop_f_ini.copy()
-    pop_m[0, :] = pop_m_ini.copy()
-
-    total_pop = [pop_f_ini.sum() + pop_m_ini.sum()]
-    pib = []
-    pib_per_capita = []
-    gasto_educacao = []
-    gasto_saude = []
-    nivel_escolaridade_medio_hist = []
-
-    taxa_desemprego_ano_anterior = desemprego_base
-
-    # --- Calibrar produtividade inicial ---
-    pop_work_ini = np.sum(pop_f_ini[work_start:work_end+1] + pop_m_ini[work_start:work_end+1])
-    produtividade_setorial_ini = sum(np.array(list(produtividade_base.values())) * np.array(list(participacao_setores.values())))
-    fator_escala_pib = df_hist['pib_real'].iloc[0] / (pop_work_ini * produtividade_setorial_ini)
-
-    # ### NOVO: Variáveis acumuladoras de progresso ###
-    # Elas guardam o quanto a cidade melhorou ano após ano
-    multiplicador_produtividade = 1.0
-    bonus_escolarizacao = 0.0
-
-    for t in range(anos_simular):
-        # ### NOVO: Lógica de Impacto do Investimento (Feedback Loop) ###
-        if not return_history:
-            # 1. Educação impacta Produtividade (PIB)
-            # Se investir +10%, a produtividade cresce 0.5% ao ano (juros compostos)
-            ganho_produtividade = invest_educ_pct * 0.05 
-            multiplicador_produtividade *= (1 + ganho_produtividade)
-            
-            # 2. Educação impacta Taxa de Matrícula
-            # Se investir, aumenta a porcentagem de alunos na escola
-            bonus_escolarizacao += (invest_educ_pct * 0.005) # Cresce devagar
-            # Limita o bônus para não passar de 100% de matrícula
-            bonus_escolarizacao = min(0.15, max(-0.10, bonus_escolarizacao))
-
-        # Atualiza as taxas de escolarização com o bônus
-        percent_escolarizacao_atual = {k: min(1.0, v + bonus_escolarizacao) for k, v in percent_escolarizacao.items()}
-
-        # --- Dinâmica Populacional (sem alterações) ---
-        popf = pop_f[t, :].copy()
-        popm = pop_m[t, :].copy()
-        sobreviventes_f = popf * (1 - mort_local)
-        sobreviventes_m = popm * (1 - mort_local)
-        new_pop_f = np.zeros_like(popf)
-        new_pop_m = np.zeros_like(popm)
-        new_pop_f[1:] = sobreviventes_f[:-1]
-        new_pop_m[1:] = sobreviventes_m[:-1]
-        nascimentos = np.sum(sobreviventes_f * fert_local)
-        new_pop_f[0] = nascimentos * sexo_ratio_f
-        new_pop_m[0] = nascimentos * (1 - sexo_ratio_f)
-        mig_in = mig_total_local * mig_by_age_dist
-        new_pop_f += mig_in * sexo_ratio_f
-        new_pop_m += mig_in * (1 - sexo_ratio_f)
-        pop_f[t+1, :] = new_pop_f
-        pop_m[t+1, :] = new_pop_m
-        pop_total_t1 = new_pop_f.sum() + new_pop_m.sum()
-        total_pop.append(pop_total_t1)
-
-        # --- Mercado de trabalho e PIB (Impactado pela Produtividade) ---
-        pop_work = np.sum(new_pop_f[work_start:work_end+1] + new_pop_m[work_start:work_end+1])
-        taxa_desemprego = max(0.01, min(0.45, 0.7 * taxa_desemprego_ano_anterior + 0.3 * desemprego_base))
-        trabalhadores_ativos = pop_work * (1 - taxa_desemprego)
-        taxa_desemprego_ano_anterior = taxa_desemprego
-
-        produtividade_setorial = sum(np.array(list(produtividade_base.values())) * np.array(list(participacao_setores.values())))
-        
-        # AQUI A MÁGICA: Multiplicamos pela produtividade acumulada
-        pib_atual = trabalhadores_ativos * produtividade_setorial * fator_escala_pib * multiplicador_produtividade
-        
-        pib.append(pib_atual)
-        pib_per_capita.append(pib_atual / pop_total_t1 if pop_total_t1 > 0 else 0.0)
-
-        # --- Educação e Saúde (Impactado pelo Custo) ---
-        idade_inicio_fund = 6
-        # Usa a porcentagem atualizada com o bônus
-        alunos_f = new_pop_f[idade_inicio_fund:idade_inicio_fund+anos_fund].sum() * percent_escolarizacao_atual['fund']
-        
-        gasto_e_base = alunos_f * param_custo_aluno
-        gasto_s_base = pop_total_t1 * param_gasto_saude_pc
-        
-        if not return_history:
-            gasto_e = gasto_e_base * (1 + invest_educ_pct)
-            gasto_s = gasto_s_base * (1 + invest_saude_pct)
-        else:
-            gasto_e = gasto_e_base
-            gasto_s = gasto_s_base
-
-        gasto_saude.append(gasto_s)
-        gasto_educacao.append(gasto_e)
-
-        # --- Escolaridade média (Correção Conceitual Simplificada) ---
-        # Vamos calcular a escolaridade média da população adulta (25+ anos)
-        # Assumindo que o investimento melhora a média ao longo do tempo
-        
-        # Valor base de escolaridade (chute calibrado aproximado: 7 anos)
-        escolaridade_base = 7.0 
-        # O multiplicador de produtividade serve como proxy para o ganho de educação da força de trabalho
-        nivel_escolaridade_medio = escolaridade_base * multiplicador_produtividade
-        
-        nivel_escolaridade_medio_hist.append(nivel_escolaridade_medio)
-
-    outputs = {
-        "total_pop": np.array(total_pop),
-        "pib": np.array(pib),
-        "pib_per_capita": np.array(pib_per_capita),
-        "gasto_saude": np.array(gasto_saude),
-        "gasto_educ": np.array(gasto_educacao),
-        "nivel_escolaridade_medio": np.array(nivel_escolaridade_medio_hist)
-    }
-    if return_history:
-        outputs.update({"pop_f": pop_f, "pop_m": pop_m})
-    return outputs
-
-# =========================================================
-# Calibração automática
-# =========================================================
-def calibration_objective(x):
-    # Agora 'x' tem 5 parâmetros, não 3
-    fert_scale, mort_scale, mig_scale, custo_aluno, gasto_saude_pc = x
-
-    out = run_simulation(fert_scale=fert_scale, mort_scale=mort_scale, mig_scale=mig_scale,
-                         anos_simular=anos_historicos,
-                         pop_f_ini=pop_inicial_f, pop_m_ini=pop_inicial_m,
-                         # Passe os novos parâmetros para a simulação
-                         param_custo_aluno=custo_aluno,
-                         param_gasto_saude_pc=gasto_saude_pc)
-    
-    # Pegue os resultados da simulação
-    sim_pop_hist = out['total_pop'][1:]
-    sim_pib_hist = out['pib'][:anos_historicos]
-    sim_saude_hist = out['gasto_saude']
-    sim_educ_hist = out['gasto_educ']
-
-    # Pegue os dados reais do DataFrame
-    real_pop = df_hist['populacao_real'].values[1:]
-    real_pib = df_hist['pib_real'].values[1:]
-    # Use .dropna() para comparar APENAS os anos que temos dados (2020-2022)
-    real_saude = df_hist['gasto_saude_real'].dropna()
-    real_educ = df_hist['gasto_educ_real'].dropna()
-
-    # Alinhe os dados simulados com os dados reais (pegando só os anos 2020-2022)
-    # real_saude.index nos diz quais anos queremos (ex: [2020, 2021, 2022])
-    # df_hist.index[1:] nos dá os anos da simulação (ex: [2015, ..., 2022])
-    
-    # Criamos um DataFrame temporário para facilitar o alinhamento
-    df_sim = pd.DataFrame(index=df_hist.index[1:])
-    df_sim['saude'] = sim_saude_hist
-    df_sim['educ'] = sim_educ_hist
-    
-    # Pegamos os valores simulados APENAS dos anos que temos dados reais
-    sim_saude_comparar = df_sim.loc[real_saude.index]['saude'].values
-    sim_educ_comparar = df_sim.loc[real_educ.index]['educ'].values
-
-    # Calcule o Erro (MAE) para cada um
-    mae_pop = np.mean(np.abs(sim_pop_hist - real_pop))
-    mae_pib = np.mean(np.abs(sim_pib_hist - real_pib))
-    mae_saude = np.mean(np.abs(sim_saude_comparar - real_saude.values))
-    mae_educ = np.mean(np.abs(sim_educ_comparar - real_educ.values))
-
-    # Atualize o 'score' para incluir os novos erros
-    # Damos pesos diferentes, Pop e PIB são mais importantes
-    score = (
-        0.35 * (mae_pop / real_pop.mean()) +
-        0.35 * (mae_pib / real_pib.mean()) +
-        0.15 * (mae_saude / real_saude.mean()) +
-        0.15 * (mae_educ / real_educ.mean())
-    )
-    return score
-
-# Dê chutes iniciais para os 5 parâmetros
-# [fert, mort, mig, custo_aluno_inicial, gasto_saude_pc_inicial]
-initial_guess = [1.0, 1.0, 1.0, 3000.0, 500.0] # Chutes mais realistas
-
-# Defina limites (bounds) para os 5 parâmetros
-# (fert_min, fert_max), (mort_min, mort_max), etc.
-param_bounds = [(0.5, 1.5), (0.7, 1.3), (0.2, 5.0),
-                (1000.0, 10000.0), # Limites para custo por aluno
-                (300.0, 3000.0)]   # Limites para gasto saúde per capita
-
-# Inicialize os parâmetros ótimos
-fert_scale_opt, mort_scale_opt, mig_scale_opt = 1.0, 1.0, 1.0
-custo_aluno_opt = initial_guess[3]
-gasto_saude_pc_opt = initial_guess[4]
-
+fert_opt, mort_opt, mig_opt, custo_opt, saude_opt = initial_guess
 if minimize is not None:
-    res = minimize(calibration_objective, initial_guess, method='L-BFGS-B',
-                   bounds=param_bounds)
+    res = minimize(calibration_objective, initial_guess, method='L-BFGS-B', bounds=param_bounds)
     if res.success:
-        # Salve os 5 parâmetros encontrados
-        fert_scale_opt, mort_scale_opt, mig_scale_opt, custo_aluno_opt, gasto_saude_pc_opt = res.x
-        st.sidebar.success(f"Calibração concluída!")
-        with st.sidebar.expander("Ver parâmetros calibrados"):
-            st.write(f"Fertilidade: {fert_scale_opt:.3f}")
-            st.write(f"Mortalidade: {mort_scale_opt:.3f}")
-            st.write(f"Migração: {mig_scale_opt:.3f}")
-            st.write(f"Custo Aluno: R$ {custo_aluno_opt:.2f}")
-            st.write(f"Saúde p/ Cap: R$ {gasto_saude_pc_opt:.2f}")
+        fert_opt, mort_opt, mig_opt, custo_opt, saude_opt = res.x
+        st.sidebar.success("Calibração concluída!")
     else:
-        st.sidebar.warning("Calibração falhou. Usando parâmetros padrão.")
+        st.sidebar.warning("Usando parâmetros padrão.")
 
-# =========================================================
-# Simulações históricas e projeção
-# =========================================================
-out_hist = run_simulation(
-    fert_scale=fert_scale_opt,
-    mort_scale=mort_scale_opt,
-    mig_scale=mig_scale_opt,
-    anos_simular=anos_historicos,
-    pop_f_ini=pop_inicial_f,
-    pop_m_ini=pop_inicial_m,
-    return_history=True,
-    # Passe os parâmetros calibrados
-    param_custo_aluno=custo_aluno_opt,
-    param_gasto_saude_pc=gasto_saude_pc_opt
-)
+# Execução das Simulações
+out_hist = run_simulation(fert_opt, mort_opt, mig_opt, anos_simular=anos_historicos, 
+                          pop_f_ini=pop_inicial_f, pop_m_ini=pop_inicial_m, return_history=True,
+                          param_custo_aluno=custo_opt, param_gasto_saude_pc=saude_opt)
 
-anos_proj_usuario = ano_usuario - ano_projecao
-out_proj = run_simulation(
-    fert_scale=fert_scale_opt,
-    mort_scale=mort_scale_opt,
-    mig_scale=mig_scale_opt,
-    fert_increase_pct=fert_increase_pct,
-    anos_simular=anos_proj_usuario,
-    pop_f_ini=out_hist['pop_f'][-1],
-    pop_m_ini=out_hist['pop_m'][-1],
-    # Passe os parâmetros calibrados
-    param_custo_aluno=custo_aluno_opt,
-    param_gasto_saude_pc=gasto_saude_pc_opt,
-    # PASSE OS VALORES DOS SLIDERS AQUI:
-    invest_educ_pct=invest_educ_pct,
-    invest_saude_pct=invest_saude_pct
-)
+anos_proj_user = ano_usuario - ano_projecao
+out_proj = run_simulation(fert_opt, mort_opt, mig_opt, fert_increase_pct=fert_increase_pct,
+                          anos_simular=anos_proj_user, pop_f_ini=out_hist['pop_f'][-1], 
+                          pop_m_ini=out_hist['pop_m'][-1], param_custo_aluno=custo_opt, 
+                          param_gasto_saude_pc=saude_opt, invest_educ_pct=invest_educ_pct, 
+                          invest_saude_pct=invest_saude_pct, return_history=True)
 
 anos_sim = np.arange(ano_projecao+1, ano_usuario+1)
 
-# =========================================================
-# Resultados numéricos (HÍBRIDO: COMPLETO ATÉ BILHÃO)
-# =========================================================
+# --- Métricas de Precisão ---
+sim_pop_h = out_hist['total_pop'][1:anos_historicos+1]
+real_pop_h = df_hist['populacao_real'].values[1:]
+sim_pib_h = out_hist['pib'][:anos_historicos]
+real_pib_h = df_hist['pib_real'].values[1:]
 
-# Função auxiliar para essa lógica específica (Smart Format)
-def formatar_smart(valor, prefixo="R$ "):
-    if valor >= 1e9: # Se for Bilhão ou mais, abrevia
-        return f"{prefixo}{valor/1e9:.2f} bi"
-    else: # Se for Milhão ou menos, mostra completo com separadores
-        # {:,.2f} coloca vírgula nos milhares e ponto no decimal (padrão internacional)
-        return f"{prefixo}{valor:,.2f}"
+err_pop = np.mean(np.abs(sim_pop_h - real_pop_h) / real_pop_h * 100)
+err_pib = np.mean(np.abs(sim_pib_h - real_pib_h) / real_pib_h * 100)
 
-col1, col2, col3 = st.columns(3)
+idx_v = df_hist['gasto_saude_real'].dropna().index - ano_inicial - 1
+sim_sau_h = np.array(out_hist['gasto_saude'])[idx_v]
+real_sau_h = df_hist['gasto_saude_real'].dropna().values
+sim_edu_h = np.array(out_hist['gasto_educ'])[idx_v]
+real_edu_h = df_hist['gasto_educ_real'].dropna().values
 
-with col1:
-    pop_final = out_proj['total_pop'][-1]
-    st.metric(
-        "População Total", 
-        f"{pop_final:,.0f}", # População sempre mostra completa (ex: 62,372)
-        help=f"Valor exato: {pop_final:,.0f} habitantes"
-    )
-
-with col2:
-    pib_final = out_proj['pib'][-1]
-    # AQUI ESTÁ A MÁGICA: Só abrevia se passar de 1 Bilhão
-    st.metric(
-        "PIB Total", 
-        formatar_smart(pib_final), 
-        help=f"Valor exato: R$ {pib_final:,.2f}"
-    )
-
-with col3:
-    pib_pc_final = out_proj['pib_per_capita'][-1]
-    # PIB per capita dificilmente passa de bilhão, então mostrará completo
-    st.metric(
-        "PIB per Capita", 
-        formatar_smart(pib_pc_final),
-        help=f"Valor exato: R$ {pib_pc_final:,.2f}"
-    )
-
-st.markdown("### Indicadores Sociais")
-
-col4, col5, col6 = st.columns(3)
-
-with col4:
-    gasto_educ_final = out_proj['gasto_educ'][-1]
-    # Gastos (Milhões) mostrarão completos
-    st.metric(
-        "Gasto com Educação", 
-        formatar_smart(gasto_educ_final),
-        help=f"Valor exato: R$ {gasto_educ_final:,.2f}"
-    )
-
-with col5:
-    gasto_saude_final = out_proj['gasto_saude'][-1]
-    st.metric(
-        "Gasto com Saúde", 
-        formatar_smart(gasto_saude_final),
-        help=f"Valor exato: R$ {gasto_saude_final:,.2f}"
-    )
-
-with col6:
-    escolaridade_final = out_proj['nivel_escolaridade_medio'][-1]
-    st.metric(
-        "Escolaridade Média", 
-        f"{escolaridade_final:.2f} anos",
-        help=f"Média de anos de estudo da população adulta"
-    )
-
-# =========================================================
-# Taxa de erro histórica (CÁLCULO DETALHADO - CORRIGIDO)
-# =========================================================
-
-# 1. Erros de População e PIB
-# A simulação gera dados a partir de 2015 (índice 1 em diante da lista total_pop)
-sim_pop_hist = out_hist['total_pop'][1:anos_historicos+1] 
-sim_pib_hist = out_hist['pib'][:anos_historicos]
-
-# Comparamos com dados reais a partir de 2015 também
-real_pop_hist = df_hist['populacao_real'].values[1:] 
-real_pib_hist = df_hist['pib_real'].values[1:]
-
-erro_pop_pct = np.mean(np.abs(sim_pop_hist - real_pop_hist) / real_pop_hist * 100)
-erro_pib_pct = np.mean(np.abs(sim_pib_hist - real_pib_hist) / real_pib_hist * 100)
-
-# 2. Erros de Saúde e Educação (temos dados apenas para 2020-2021)
-real_saude = df_hist['gasto_saude_real'].dropna()
-real_educ = df_hist['gasto_educ_real'].dropna()
-
-# Identificamos quais anos têm dados
-anos_com_dados = real_saude.index.values
-
-# CORREÇÃO AQUI: Subtraímos (ano_inicial + 1) porque a lista de gastos simulados começa em 2015
-indices_validos = [ano - (ano_inicial + 1) for ano in anos_com_dados]
-
-# Agora pegamos os valores simulados usando os índices corretos
-sim_saude_valid = np.array(out_hist['gasto_saude'])[indices_validos]
-sim_educ_valid = np.array(out_hist['gasto_educ'])[indices_validos]
-
-erro_saude_pct = np.mean(np.abs(sim_saude_valid - real_saude.values) / real_saude.values * 100)
-erro_educ_pct = np.mean(np.abs(sim_educ_valid - real_educ.values) / real_educ.values * 100)
-
-# 3. Cálculo do Erro Total
-erro_total_medio = (erro_pop_pct + erro_pib_pct + erro_saude_pct + erro_educ_pct) / 4
-
-# --- Exibição no Streamlit ---
-st.markdown("---") 
-st.subheader("Precisão do Modelo (Calibragem 2015-2021)")
-
-# 1. Mostra APENAS o Erro Global em destaque
-col_total, col_vazia = st.columns([1, 3]) # Ajustei a proporção para ficar mais canto esquerdo
-with col_total:
-    st.metric("Erro Global Médio", f"{erro_total_medio:.2f}%", 
-              help="Média geral dos erros. Clique abaixo para ver os detalhes.")
-
-# 2. Cria o Dropdown (Expander) para os detalhes
-with st.expander("Ver detalhes dos erros por setor"):
-    st.write("Detalhamento do erro percentual médio:")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Erro População", f"{erro_pop_pct:.2f}%")
-    with c2:
-        st.metric("Erro PIB", f"{erro_pib_pct:.2f}%")
-    with c3:
-        st.metric("Erro Saúde", f"{erro_saude_pct:.2f}%")
-    with c4:
-        st.metric("Erro Educação", f"{erro_educ_pct:.2f}%")
-    
-    st.caption("Nota: O erro é calculado comparando a simulação com os dados reais do IBGE/SIOPS de 2015 a 2021.")
+err_sau = np.mean(np.abs(sim_sau_h - real_sau_h) / real_sau_h * 100)
+err_edu = np.mean(np.abs(sim_edu_h - real_edu_h) / real_edu_h * 100)
+err_total = (err_pop + err_pib + err_sau + err_edu) / 4
 
 st.markdown("---")
+st.subheader("Precisão do Modelo (Calibragem 2015-2021)")
+col_t, _ = st.columns([1, 3])
+col_t.metric("Erro Global Médio", f"{err_total:.2f}%")
 
+with st.expander("Ver detalhes dos erros por setor"):
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Erro População", f"{err_pop:.2f}%")
+    c2.metric("Erro PIB", f"{err_pib:.2f}%")
+    c3.metric("Erro Saúde", f"{err_sau:.2f}%")
+    c4.metric("Erro Educação", f"{err_edu:.2f}%")
 
+# --- Resultados Principais (Cards) ---
+st.markdown("---")
+c1, c2, c3 = st.columns(3)
+c1.metric("População Total", f"{out_proj['total_pop'][-1]:,.0f} habitantes", help="Total projetado")
+c2.metric("PIB Total", formatar_smart(out_proj['pib'][-1]), help="PIB Real projetado")
+c3.metric("PIB per Capita", formatar_smart(out_proj['pib_per_capita'][-1]))
 
+st.markdown("### Indicadores Sociais")
+c4, c5, c6 = st.columns(3)
+c4.metric("Gasto Educação", formatar_smart(out_proj['gasto_educ'][-1]))
+c5.metric("Gasto Saúde", formatar_smart(out_proj['gasto_saude'][-1]))
+c6.metric("Escolaridade Média", f"{out_proj['nivel_escolaridade_medio'][-1]:.2f} anos", help="Média estimada de anos de estudo")
 
-# =========================================================
-# Gráfico da população
-# =========================================================
+# ==============================================================================
+# 6. GRÁFICOS
+# ==============================================================================
+
 st.header("Evolução da População")
 fig, ax = plt.subplots(figsize=(10,6))
-ax.plot(anos_sim, out_proj['total_pop'][1:], label=f"População Fertilidade +{fert_increase_pct*100:.0f}%")
-ax.set_xlabel("Ano")
+ax.plot(anos_sim, out_proj['total_pop'][1:], label=f"População (Cenário Atual)")
 ax.set_ylabel("População")
+ax.grid(True, alpha=0.3)
 ax.legend()
-ax.grid(True)
 ax.yaxis.set_major_formatter(FuncFormatter(formatar_habitantes))
 st.pyplot(fig)
 
-# =========================================================
-# Gráfico do PIB Total e per Capita
-# =========================================================
-st.header("PIB Total e Per Capita (com escalas separadas)")
+st.header("PIB Total e Per Capita")
 fig2, ax1 = plt.subplots(figsize=(10,6))
-color_pib = 'tab:blue'
-color_pc = 'tab:red'
-ax1.plot(anos_sim, out_proj['pib'], color=color_pib, label='PIB Total')
-ax1.set_xlabel("Ano")
-ax1.set_ylabel("PIB Total", color=color_pib)
-ax1.tick_params(axis='y', labelcolor=color_pib)
+c_pib, c_pc = 'tab:blue', 'tab:red'
+ax1.plot(anos_sim, out_proj['pib'], color=c_pib, label='PIB Total')
+ax1.set_ylabel("PIB Total", color=c_pib)
+ax1.tick_params(axis='y', labelcolor=c_pib)
 ax1.yaxis.set_major_formatter(FuncFormatter(formatar_valor))
-ax1.grid(True)
+ax1.grid(True, alpha=0.3)
+
 ax2 = ax1.twinx()
-ax2.plot(anos_sim, out_proj['pib_per_capita'], color=color_pc, linestyle='--', label='PIB per Capita')
-ax2.set_ylabel("PIB per Capita", color=color_pc)
-ax2.tick_params(axis='y', labelcolor=color_pc)
+ax2.plot(anos_sim, out_proj['pib_per_capita'], color=c_pc, linestyle='--', label='PIB per Capita')
+ax2.set_ylabel("PIB per Capita", color=c_pc)
+ax2.tick_params(axis='y', labelcolor=c_pc)
 ax2.yaxis.set_major_formatter(FuncFormatter(formatar_valor))
 fig2.legend(loc="upper left", bbox_to_anchor=(0.1, 0.9))
 st.pyplot(fig2)
 
-# =========================================================
-# Gráfico dos gastos
-# =========================================================
 st.header("Gastos com Educação e Saúde")
 fig3, ax3 = plt.subplots(figsize=(10,6))
 ax3.plot(anos_sim, out_proj['gasto_educ'], label="Educação")
 ax3.plot(anos_sim, out_proj['gasto_saude'], label="Saúde", linestyle="--")
-ax3.set_xlabel("Ano")
-ax3.set_ylabel("R$")
+ax3.set_ylabel("Valor (R$)")
 ax3.legend()
-ax3.grid(True)
+ax3.grid(True, alpha=0.3)
 ax3.yaxis.set_major_formatter(FuncFormatter(formatar_valor))
 st.pyplot(fig3)
 
-# =========================================================
-# Gráfico da escolaridade média
-# =========================================================
-st.header("Evolução do Nível Médio de Escolaridade")
+st.header("Evolução da Escolaridade Média")
 fig4, ax4 = plt.subplots(figsize=(10,6))
-ax4.plot(anos_sim, out_proj['nivel_escolaridade_medio'], label="Escolaridade Média")
-ax4.set_xlabel("Ano")
+ax4.plot(anos_sim, out_proj['nivel_escolaridade_medio'], label="Anos de Estudo", color='green')
 ax4.set_ylabel("Anos")
-ax4.grid(True)
+ax4.grid(True, alpha=0.3)
 ax4.legend()
 st.pyplot(fig4)
-
-st.info("Simulação feita a partir de 2022. Os dados históricos anteriores a 2022 foram usados para calibrar o modelo. O usuário pode escolher o ano da projeção e o impacto da fertilidade no futuro da população, educação, PIB e escolaridade.")
